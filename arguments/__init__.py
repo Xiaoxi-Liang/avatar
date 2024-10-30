@@ -53,7 +53,7 @@ class ModelParams(ParamGroup):
         self._resolution = -1
         self._white_background = True
         self.data_device = "cuda"
-        self.eval = True
+        self.eval = False
         self.render_process=False
         self.add_points=False
         self.extension=".png"

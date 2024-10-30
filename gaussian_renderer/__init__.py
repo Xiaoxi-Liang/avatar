@@ -14,9 +14,74 @@ import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from time import time 
+import copy
+
+class RoundCamera():
+    def __init__(self, cam):
+
+
+        x_angle =[-30,-20,-10,10,20,30]
+        y_angle =[-30,-20,-10,10,20,30]
+
+        self.n= len(x_angle)+len(y_angle)+1
+
+        
+        self.world_view_transform_center_defaut = cam.world_view_transform.transpose(0,1)
+        self.camera_list = [copy.deepcopy(cam) for _ in range(self.n)]
+        self.device = self.world_view_transform_center_defaut.device
+
+        i = 0
+
+        for angle in x_angle:
+            i += 1
+            R_x = self.call_x_rot(angle).to(self.device)
+            W2C = torch.eye(4).to(self.device)
+            W2C[:3, :3] = R_x @ self.world_view_transform_center_defaut[:3, :3]
+            W2C[:3, 3] = self.world_view_transform_center_defaut[:3, 3]
+            self.camera_list[i].world_view_transform = W2C.transpose(0, 1)
+            self.camera_list[i].full_proj_transform=(self.camera_list[i].world_view_transform.unsqueeze(0).bmm(self.camera_list[i].projection_matrix.unsqueeze(0))).squeeze(0)
+            self.camera_list[i].camera_center= self.camera_list[i].world_view_transform.inverse()[3, :3]
     
+        for angle in y_angle:
+            i += 1
+            R_y = self.call_y_rot(angle).to(self.device)
+            W2C = torch.eye(4).to(self.device)
+            W2C[:3, :3] = R_y @ self.world_view_transform_center_defaut[:3, :3]
+            W2C[:3, 3] = self.world_view_transform_center_defaut[:3, 3]
+            self.camera_list[i].world_view_transform = W2C.transpose(0, 1)
+            self.camera_list[i].full_proj_transform=(self.camera_list[i].world_view_transform.unsqueeze(0).bmm(self.camera_list[i].projection_matrix.unsqueeze(0))).squeeze(0)
+            self.camera_list[i].camera_center= self.camera_list[i].world_view_transform.inverse()[3, :3]
+
+
+
+    def call_x_rot(self, angle):
+        theta = torch.tensor(angle, dtype=torch.float32) * torch.pi / 180  # 将角度转为弧度
+        R_x = torch.tensor([
+            [1, 0, 0],
+            [0, torch.cos(theta), -torch.sin(theta)],
+            [0, torch.sin(theta), torch.cos(theta)]
+        ])
+        return R_x
     
-def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color= False, scaling_modifier = 1.0, stage="fine", batch_size=1, visualize_attention=False, only_infer = False, canonical_tri_plane_factor_list = None, iteration=None):
+    def call_y_rot(self, angle):
+        theta = torch.tensor(angle, dtype=torch.float32) * torch.pi / 180  # 将角度转为弧度
+        R_y = torch.tensor([
+            [torch.cos(theta), 0, torch.sin(theta)],
+            [0, 1, 0],
+            [-torch.sin(theta), 0, torch.cos(theta)]
+        ])
+        return R_y
+    
+    def __len__(self):
+        return self.n
+    
+    def __repr__(self):
+        return "RoundCamera()"    
+
+
+
+def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color= False, scaling_modifier = 1.0, stage="fine", batch_size=1, visualize_attention=False, only_infer = False, canonical_tri_plane_factor_list = None, 
+                      iteration=None, is_eval=False, is_spiral_multi=None):
     if only_infer:
         time1 = time()
         batch_size = len(viewpoint_cameras)
@@ -32,11 +97,13 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
     aud_features = []
     eye_features = []
     rasterizers = []
+    rasterizers_multiview =[]
     gt_imgs = []
     viewspace_point_tensor_list = []
     means2Ds = []
     lips_list = []
     bg_w_torso_list = []
+    bg_all_black_list = []
     gt_masks = []
     gt_w_bg = []
     cam_features = []
@@ -49,27 +116,54 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
             pass
         means2Ds.append(screenspace_points)
         viewspace_point_tensor_list.append(screenspace_points)
-        
+
         if random_color:
             background = torch.rand((3,), dtype=torch.float32, device="cuda")
             bg_image = background[:, None, None] * torch.ones((1, viewpoint_camera.image_height, viewpoint_camera.image_width), device=background.device)
         elif only_infer:
             bg_image = viewpoint_camera.bg_w_torso.to('cuda')
+            bg_image = viewpoint_camera.bg_all_black.to('cuda')
         else: 
             white_or_black = torch.randint(2, (1,)).item()
             background = torch.full((3,), white_or_black, dtype=torch.float32, device="cuda")
             bg_image = background[:, None, None] * torch.ones((1, viewpoint_camera.image_height, viewpoint_camera.image_width), device=background.device)
-        
+
         aud_features.append(viewpoint_camera.aud_f.unsqueeze(0).to(means3D.device))
         eye_features.append(torch.from_numpy(np.array([viewpoint_camera.eye_f])).unsqueeze(0).to(means3D.device))
         cam_features.append(torch.from_numpy(np.concatenate((viewpoint_camera.R.reshape(-1), viewpoint_camera.T.reshape(-1))).reshape(1,-1)).to(means3D.device))
-        bg_w_torso_list.append(viewpoint_camera.bg_w_torso.cpu())
-        
-        bg_image = viewpoint_camera.bg_w_torso.to('cuda')
-        
+        # bg_w_torso_list.append(viewpoint_camera.bg_w_torso.cpu())
+        bg_all_black_list.append(viewpoint_camera.bg_all_black.cpu())
+        # bg_image = viewpoint_camera.bg_w_torso.to('cuda')
+        bg_image = viewpoint_camera.bg_all_black.to('cuda')
+
         tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
         tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-            
+
+        if is_eval:
+
+            round_cam = RoundCamera(viewpoint_camera)
+            rasterizers_sub_list = []
+            for i in range(len(round_cam)):
+
+                raster_settings = GaussianRasterizationSettings(
+                    image_height=int(round_cam.camera_list[i].image_height),
+                    image_width=int(round_cam.camera_list[i].image_width),
+                    tanfovx= tanfovx,
+                    tanfovy= tanfovy,
+                    bg=bg_image,
+                    scale_modifier=scaling_modifier,
+                    viewmatrix=round_cam.camera_list[i].world_view_transform.cuda(),
+                    projmatrix=round_cam.camera_list[i].full_proj_transform.cuda(),
+                    sh_degree=pc.active_sh_degree,
+                    campos=round_cam.camera_list[i].camera_center.cuda(),
+                    prefiltered=False,
+                    debug=pipe.debug)
+                rasterizers_sub_list.append(GaussianRasterizer(raster_settings=raster_settings))
+            rasterizers_multiview.append(rasterizers_sub_list)
+
+
+
+
         raster_settings = GaussianRasterizationSettings(
             image_height=int(viewpoint_camera.image_height),
             image_width=int(viewpoint_camera.image_width),
@@ -98,6 +192,7 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
     
     if stage == "coarse":
         aud_features, eye_features, cam_features = None, None, None 
+
         means3D_final, scales_temp, rotations_temp, opacity_temp, shs_temp = pc._deformation(means3D, scales, rotations, opacity, shs, aud_features, eye_features, cam_features)
         if "scales" in canonical_tri_plane_factor_list:
             scales_temp = scales_temp-2
@@ -131,6 +226,8 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
         aud_features = torch.cat(aud_features,dim=0)
         eye_features = torch.cat(eye_features,dim=0)
         cam_features = torch.cat(cam_features,dim=0)
+
+        cam_features = cam_features.float()
         means3D_final, scales_final, rotations_final, opacity_final, shs_final, attention = pc._deformation(means3D, scales, rotations, opacity, shs, aud_features, eye_features,cam_features)
                                                                                                     
         scales_final = pc.scaling_activation(scales_final)
@@ -139,6 +236,7 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
         
     
     rendered_image_list = []
+    rendered_image_multiview_list = []
     radii_list = []
     depth_list = []
     visibility_filter_list = []
@@ -151,6 +249,33 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
     
     for idx, rasterizer in enumerate(rasterizers):
         colors_precomp = None
+
+        if is_eval:
+            ras_sub_list = rasterizers_multiview[idx]
+            n_image = len(ras_sub_list)
+            n_row = math.ceil(n_image / 4)
+            n_col = 4
+            img_height = int(round_cam.camera_list[0].image_height)
+            img_width = int(round_cam.camera_list[0].image_width)
+            rendered_image_multiview = torch.zeros(3,int(round_cam.camera_list[0].image_height)*n_col,
+                                          int(round_cam.camera_list[0].image_width)*n_row)
+            for i in range(n_image):
+                sub_rasterizer = ras_sub_list[i]
+                rendered_image_sub, radii, depth = sub_rasterizer(
+                    means3D = means3D_final[idx],
+                    means2D = means2Ds[idx],
+                    shs = shs_final[idx],
+                    colors_precomp = colors_precomp,
+                    opacities = opacity_final[idx],
+                    scales = scales_final[idx],
+                    rotations = rotations_final[idx],
+                    cov3D_precomp = cov3D_precomp,)
+                row = i // n_row
+                col = i % n_row
+                start_y = row * img_height
+                start_x = col * img_width
+                rendered_image_multiview[:, start_y:start_y + img_height, start_x:start_x + img_width] = rendered_image_sub
+        
         rendered_image, radii, depth = rasterizer(
             means3D = means3D_final[idx],
             means2D = means2Ds[idx],
@@ -161,6 +286,8 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
             rotations = rotations_final[idx],
             cov3D_precomp = cov3D_precomp,)
 
+        if is_eval:
+            rendered_image_multiview_list.append(rendered_image_multiview.unsqueeze(0))
         rendered_image_list.append(rendered_image.unsqueeze(0))
         radii_list.append(radii.unsqueeze(0))
         depth_list.append(depth.unsqueeze(0))
@@ -243,6 +370,8 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
     radii = torch.cat(radii_list,0).max(dim=0).values
     visibility_filter_tensor = torch.cat(visibility_filter_list).any(dim=0)
     rendered_image_tensor = torch.cat(rendered_image_list,0)
+    if is_eval:
+        rendered_image_multiview_tensor = torch.cat(rendered_image_multiview_list,0)
     gt_tensor = torch.cat(gt_imgs,0)
     depth_tensor = torch.cat(depth_list,dim=0)
     gt_masks_tensor = torch.cat(gt_masks,dim=0)
@@ -264,7 +393,26 @@ def render_from_batch(viewpoint_cameras, pc : GaussianModel, pipe, random_color=
     if only_infer:
         inference_time = time()-time1
         
-        
+    if is_eval:
+        return {"rendered_image_tensor": rendered_image_tensor,
+            "rendered_image_multiview_tensor": rendered_image_multiview_tensor,
+            "gt_tensor":gt_tensor,
+            "viewspace_points": screenspace_points,
+            "visibility_filter_tensor" : visibility_filter_tensor,
+            "viewspace_point_tensor_list" : viewspace_point_tensor_list,
+            "radii": radii,
+            "depth_tensor": depth_tensor,
+            "audio_attention": audio_image_tensor,
+            "eye_attention": eye_image_tensor,
+            "cam_attention" : cam_image_tensor,
+            "null_attention": null_image_tensor,
+            "rendered_lips_tensor":rendered_lips_tensor,
+            "gt_lips_tensor":gt_lips_tensor,
+            "rendered_w_bg_tensor":rendered_w_bg_tensor,
+            "inference_time":inference_time,
+            "gt_masks_tensor":gt_masks_tensor,
+            "gt_w_bg_tensor":gt_w_bg_tensor,
+            }
     return {"rendered_image_tensor": rendered_image_tensor,
         "gt_tensor":gt_tensor,
         "viewspace_points": screenspace_points,

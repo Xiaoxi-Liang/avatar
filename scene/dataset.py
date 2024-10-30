@@ -22,66 +22,85 @@ class FourDGSdataset(Dataset):
     def __init__(
         self,
         dataset,
+        dataset_fake,
         args,
         dataset_type,
-        aud=None
+        aud=None,
+
     ):
         self.dataset = dataset
+        self.dataset_fake = dataset_fake
+        self.n_fake = len(self.dataset_fake)
+
+        assert self.n_fake % len(self.dataset) == 0, "Fake Cameras must be times than real cameras"
+        self.fake_num = self.n_fake //len(self.dataset)
         self.args = args
         self.dataset_type=dataset_type
+
+    
     def __getitem__(self, index):
-        if self.dataset_type != "PanopticSports":
-
-            caminfo = self.dataset[index]
-            R = caminfo.R  # (3, 3)
-            T = caminfo.T
-            FovX = caminfo.FovX
-            FovY = caminfo.FovY
-            trans = caminfo.trans.cpu().numpy()
-
-            mask = caminfo.mask
-            
-            full_image = caminfo.full_image
-            if full_image is None:
-                full_image = cv2.imread(caminfo.full_image_path, cv2.IMREAD_UNCHANGED)
-                full_image = cv2.cvtColor(full_image, cv2.COLOR_BGR2RGB)
-                full_image = torch.from_numpy(full_image).permute(2,0,1).float() / 255.0
-                
-            torso_image = caminfo.torso_image
-            if torso_image is None:
-                torso_image = cv2.imread(caminfo.torso_image_path, cv2.IMREAD_UNCHANGED) # [H, W, 4]
-                torso_image = cv2.cvtColor(torso_image, cv2.COLOR_BGRA2RGBA)
-                torso_image = torso_image.astype(np.float32) / 255 # [H, W, 3/4]
-                torso_image = torch.from_numpy(torso_image) # [3/4, H, W]
-                torso_image = torso_image.permute(2, 0, 1)
-
-                
-            bg_image = caminfo.bg_image
-            if bg_image is None:
-                bg_img = cv2.imread(caminfo.bg_image_path, cv2.IMREAD_UNCHANGED) # [H, W, 3]
-                if bg_img.shape[0] != caminfo.height or bg_img.shape[1] != caminfo.width:
-                    bg_img = cv2.resize(bg_img, (caminfo.width, caminfo.height), interpolation=cv2.INTER_AREA)
-                bg_img = cv2.cvtColor(bg_img, cv2.COLOR_BGR2RGB)
-                bg_image = torch.from_numpy(bg_img).permute(2,0,1).float() / 255.0
-            
-            seg = caminfo.mask
-            if seg is None:
-                seg = cv2.imread(caminfo.mask_path)
-            head_mask = (seg[..., 0] == 255) & (seg[..., 1] == 0) & (seg[..., 2] == 0)
-            bg_w_torso = torso_image[:3,...] * torso_image[3:,...] + bg_image * (1-torso_image[3:,...])
-                        
-            face_rect = caminfo.face_rect
-            lhalf_rect = caminfo.lhalf_rect
-            eye_rect = caminfo.eye_rect
-            lips_rect = caminfo.lips_rect
-            
-            return Camera(colmap_id=index,R=R,T=T,FoVx=FovX,FoVy=FovY,gt_image=full_image, head_mask=head_mask, bg_image = bg_image,
-                    image_name=f"{index}",uid=index,data_device=torch.device("cuda"), #trans=trans,
-                    aud_f = caminfo.aud_f, eye_f = caminfo.eye_f,
-                    face_rect=face_rect, lhalf_rect=lhalf_rect, eye_rect=eye_rect, lips_rect=lips_rect, bg_w_torso = bg_w_torso)
-            
+            #TODO: 修改逻辑
+        
+        random_number = np.random.randint(0, 1)
+        if self.n_fake > 0 and random_number == 0:
+            caminfo = self.dataset_fake[index * self.fake_num + np.random.randint(0, self.fake_num)]
         else:
-            return self.dataset[index]
+            caminfo = self.dataset[index]
+
+        R = caminfo.R  # (3, 3)
+        T = caminfo.T
+        FovX = caminfo.FovX
+        FovY = caminfo.FovY
+        # TODO: 修改这个每十次 load 一次fake
+
+        mask = caminfo.mask
+        
+        full_image = caminfo.full_image
+        if full_image is None:
+            full_image = cv2.imread(caminfo.full_image_path, cv2.IMREAD_UNCHANGED)
+            full_image = cv2.cvtColor(full_image, cv2.COLOR_BGR2RGB)
+            full_image = torch.from_numpy(full_image).permute(2,0,1).float() / 255.0
+            
+        torso_image = caminfo.torso_image
+        if torso_image is None:
+            torso_image = cv2.imread(caminfo.torso_image_path, cv2.IMREAD_UNCHANGED) # [H, W, 4]
+            torso_image = cv2.cvtColor(torso_image, cv2.COLOR_BGRA2RGBA)
+            torso_image = torso_image.astype(np.float32) / 255 # [H, W, 3/4]
+            torso_image = torch.from_numpy(torso_image) # [3/4, H, W]
+            torso_image = torso_image.permute(2, 0, 1)
+
+            
+        bg_image = caminfo.bg_image
+        if bg_image is None:
+            bg_img = cv2.imread(caminfo.bg_image_path, cv2.IMREAD_UNCHANGED) # [H, W, 3]
+            if bg_img.shape[0] != caminfo.height or bg_img.shape[1] != caminfo.width:
+                bg_img = cv2.resize(bg_img, (caminfo.width, caminfo.height), interpolation=cv2.INTER_AREA)
+            bg_img = cv2.cvtColor(bg_img, cv2.COLOR_BGR2RGB)
+            bg_image = torch.from_numpy(bg_img).permute(2,0,1).float() / 255.0
+        
+        seg = caminfo.mask
+        if seg is None:
+            seg = cv2.imread(caminfo.mask_path)
+
+        # blue and black and grey
+        head_mask = ((seg[..., 0] == 255) & (seg[..., 1] == 0) & (seg[..., 2] == 0)) | ((seg[..., 0] == 0) & (seg[..., 1] == 0) & (seg[..., 2] == 0)) | ((seg[..., 0] == 100) & (seg[..., 1] == 100) & (seg[..., 2] == 100)) 
+
+
+        # do not use it first
+        bg_w_torso = torso_image[:3,...] * torso_image[3:,...] + bg_image * (1-torso_image[3:,...])
+        bg_all_black = torch.zeros_like(bg_w_torso).to(bg_w_torso.device)
+
+        face_rect = caminfo.face_rect
+        lhalf_rect = caminfo.lhalf_rect
+        eye_rect = caminfo.eye_rect
+        lips_rect = caminfo.lips_rect
+
+        return Camera(colmap_id=index,R=R,T=T,FoVx=FovX,FoVy=FovY,gt_image=full_image, head_mask=head_mask, bg_image = bg_image,
+                image_name=f"{index}",uid=index,data_device=torch.device("cuda"), #trans=trans,
+                aud_f = caminfo.aud_f, eye_f = caminfo.eye_f,
+                face_rect=face_rect, lhalf_rect=lhalf_rect, eye_rect=eye_rect, lips_rect=lips_rect, bg_w_torso = bg_w_torso, bg_all_black= bg_all_black)
+            
+
     
     def __len__(self):
         

@@ -18,7 +18,7 @@ class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, gt_image, head_mask, bg_image,
                  image_name, uid, trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", 
                  aud_f = None, eye_f = None, depth=None,
-                 face_rect = None, lhalf_rect = None, eye_rect = None, lips_rect = None, bg_w_torso = None):
+                 face_rect = None, lhalf_rect = None, eye_rect = None, lips_rect = None, bg_w_torso = None, bg_all_black= None):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -40,6 +40,7 @@ class Camera(nn.Module):
         self.head_mask = head_mask
         self.bg_image = bg_image
         self.bg_w_torso = bg_w_torso
+        self.bg_all_black = bg_all_black
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
 

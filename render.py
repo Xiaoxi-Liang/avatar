@@ -25,6 +25,40 @@ from gaussian_renderer import GaussianModel
 import concurrent.futures
 from torch.utils.data import DataLoader
 
+
+
+from dreifus.camera import CameraCoordinateConvention, PoseType
+from dreifus.image import Img
+from dreifus.matrix import Pose
+from dreifus.trajectory import circle_around_axis
+from dreifus.vector import Vec3
+
+class SpiralCamera():
+    def __init__(self, move_z = 4.4, dist=0.2, spiral_num=96, device='cuda'):
+        # array([ 0.00134967, -0.00363164,  0.03619983], dtype=float32)
+        self.move_z = move_z
+        self.spiral_num = spiral_num
+        self.idx = 0
+        self.device = device
+
+        self.poses = circle_around_axis(self.spiral_num, up=Vec3(0, 1, 0), move=Vec3(0, 0, move_z), distance=dist,
+                                theta_to=2 * np.pi)
+
+    
+    def set_cam_batch(self, cams):
+
+
+        for idx, cam in enumerate(cams):
+            cam.world_view_transform = torch.from_numpy(np.array(self.poses[self.idx])).transpose(0,1)
+            cam.full_proj_transform = (cam.world_view_transform.unsqueeze(0).bmm(cam.projection_matrix.unsqueeze(0))).squeeze(0)
+            cam.camera_center= cam.world_view_transform.inverse()[3, :3]
+            self.idx += 1
+            if self.idx >= self.spiral_num:
+                self.idx = 0
+
+        return cams
+
+
 def multithread_write(image_list, path):
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=None)
     def write_image(image, count, path):
@@ -46,8 +80,15 @@ to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
 def render_set(model_path, name, iteration, scene, gaussians, pipeline,audio_dir, batch_size):
+
+
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+
+    if SUBNAME != '':
+        render_path = os.path.join(model_path, name, SUBNAME, "ours_{}".format(iteration), "renders")
+        gts_path = os.path.join(model_path, name, SUBNAME, "ours_{}".format(iteration), "gt")   
+
     inf_audio_dir = audio_dir
     
     makedirs(render_path, exist_ok=True)
@@ -65,12 +106,14 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline,audio_dir
         print("        train set rendering  :   {} frames   ".format(process_until))
         print(" -------------------------------------------------")
     else:
+        # TODO: viewpoint_stack.dataset 指的是哪个啊
         process_until = len(viewpoint_stack.dataset) 
         print(" -------------------------------------------------")
         print("        test set rendering  :   {}  frames  ".format(process_until))
         print(" -------------------------------------------------") 
     print("point nums:",gaussians._xyz.shape[0])
     image = []
+    multi_view_image = []
     gt = []
     audio_attention = []
     eye_attention = []
@@ -82,20 +125,40 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline,audio_dir
         iterations += 1
     total_time = 0
     #render image
+
+    is_spiral_single = True
+    if is_spiral_single:
+        spiralCam = SpiralCamera()
+
     for idx in tqdm(range(iterations), desc="Rendering progress",total = iterations):
 
+        # loader._use_fake = False
         viewpoint_cams = next(loader)
-        try:
-            output = render_from_batch(viewpoint_cams, gaussians, pipeline, 
-                                random_color= False, stage='fine',
-                                batch_size=batch_size, visualize_attention=False, only_infer=True)
-        except:
-            break
+
+        ##############################################
+        is_eval = False
+
+        if is_spiral_single:    
+            viewpoint_cams = spiralCam.set_cam_batch(viewpoint_cams)
+        is_spiral_multi = False
+
+        # NOTE: is_eval = True control round camera rendering
+        # NOTE: is_spiral_multi = True control multi spiral camera rendering
+        ########################################
+        
+        output = render_from_batch(viewpoint_cams, gaussians, pipeline, 
+                            random_color= False, stage='fine',
+                            batch_size=batch_size, visualize_attention=False, only_infer=True, is_eval=is_eval, is_spiral_multi=is_spiral_multi)
+
         total_time += output["inference_time"]
         image.append(output["rendered_image_tensor"].cpu())
+        if is_eval or is_spiral_multi:
+            multi_view_image.append(output["rendered_image_multiview_tensor"].cpu())
         gt.append(output["gt_tensor"].cpu())
         
     image_tensor = torch.cat(image,dim=0)[:process_until]
+    if is_eval or is_spiral_multi:
+        multi_view_image_tensor = torch.cat(multi_view_image,dim=0)[:process_until]
     gt_image_tensor = torch.cat(gt,dim=0)[:process_until]
     
     print("total frame:",(image_tensor.shape[0]))
@@ -127,6 +190,9 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline,audio_dir
     
     if name != 'custom':
         write_frames_to_video(tensor_to_image(gt_image_tensor),gts_path+f'/gt', use_imageio = True)
+
+    if is_eval or is_spiral_multi:
+        write_frames_to_video(tensor_to_image(multi_view_image_tensor),render_path+'/renders_multiview', use_imageio = True)
     write_frames_to_video(tensor_to_image(image_tensor),render_path+'/renders', use_imageio = True)
     write_frames_to_video(tensor_to_image(audio_tensor),render_path+'/audio', use_imageio = False)
     write_frames_to_video(tensor_to_image(eye_tensor),render_path+'/eye', use_imageio = False)
@@ -146,18 +212,18 @@ def render_set(model_path, name, iteration, scene, gaussians, pipeline,audio_dir
     os.system(cmd)
     cmd = f'ffmpeg -loglevel quiet -y -i {render_path}/cam.mp4 -i {inf_audio_dir} -c:v copy -c:a aac {render_path}/{model_path.split("/")[-2]}_{name}_{iteration}iter_cam.mov'
     os.system(cmd)
-    
-    if name != 'custom':
-        os.remove(f"{gts_path}/gt.mp4")
-    os.remove(f"{render_path}/renders.mp4")
-    os.remove(f"{render_path}/audio.mp4")
-    os.remove(f"{render_path}/eye.mp4")
-    os.remove(f"{render_path}/null.mp4")
-    os.remove(f"{render_path}/cam.mp4")
+
+    # if name != 'custom':
+    #     os.remove(f"{gts_path}/gt.mp4")
+    # os.remove(f"{render_path}/renders.mp4")
+    # os.remove(f"{render_path}/audio.mp4")
+    # os.remove(f"{render_path}/eye.mp4")
+    # os.remove(f"{render_path}/null.mp4")
+    # os.remove(f"{render_path}/cam.mp4")
     
 def render_sets(dataset : ModelParams, hyperparam, iteration : int, pipeline : PipelineParams, args):
     skip_train, skip_test, skip_video, batch_size= args.skip_train, args.skip_test, args.skip_video, args.batch
-    
+
     with torch.no_grad():
         data_dir = dataset.source_path
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)
@@ -207,12 +273,14 @@ def tensor_to_image(tensor, normalize=True):
             
 if __name__ == "__main__":
     # Set up command line argument parser
+    
     parser = ArgumentParser(description="Testing script parameters")
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
     hyperparam = ModelHiddenParams(parser)
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--skip_train", action="store_true")
+    parser.add_argument("--name", type=str, default='')
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--skip_video", action="store_true")
@@ -221,6 +289,7 @@ if __name__ == "__main__":
     parser.add_argument("--custom_aud", type=str, default='')
     parser.add_argument("--custom_wav", type=str, default='')
     # parser.add_argument("--audio_dir", type=str)
+
     args = get_combined_args(parser)
     print("Rendering " , args.model_path)
     if args.configs:
@@ -229,7 +298,8 @@ if __name__ == "__main__":
         config = mmcv.Config.fromfile(args.configs)
         args = merge_hparams(args, config)
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    # safe_state(args.quiet)
     args.only_infer = True
     print(args)
+    SUBNAME=args.name
     render_sets(model.extract(args), hyperparam.extract(args), args.iteration, pipeline.extract(args), args)

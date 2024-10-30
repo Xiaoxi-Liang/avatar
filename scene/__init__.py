@@ -47,22 +47,27 @@ class Scene:
         self.test_cameras = {}
         self.video_cameras = {}
 
+        args.eval = False
         scene_info = sceneLoadTypeCallbacks2["ER-NeRF"](args.source_path, False, args.eval, custom_aud=custom_aud)
         dataset_type = "ER-NeRF"
         
-        self.maxtime = scene_info.maxtime
         self.dataset_type = dataset_type
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 
         print("Loading Training Cameras")
-        self.train_camera = FourDGSdataset(scene_info.train_cameras, args, dataset_type)
+        
+        ########################
+        # NOTE: if scene_info.train_cameras_fake, dataloader not load fake cam
+        ######################
+
+        self.train_camera = FourDGSdataset(scene_info.train_cameras, scene_info.train_cameras_fake, args, dataset_type)
         print("Loading Test Cameras")
-        self.test_camera = FourDGSdataset(scene_info.test_cameras, args, dataset_type)
-        print("Loading Video Cameras")
-        self.video_camera = FourDGSdataset(scene_info.video_cameras, args, dataset_type)
+        self.test_camera = FourDGSdataset(scene_info.test_cameras, scene_info.test_cameras_fake,args, dataset_type)
+        # print("Loading Video Cameras")
+        # self.video_camera = FourDGSdataset(scene_info.video_cameras, args, dataset_type)
         if custom_aud:
             print("Loading Custom Cameras")
-            self.custom_camera = FourDGSdataset(scene_info.custom_cameras, args, dataset_type)
+            self.custom_camera = FourDGSdataset(scene_info.custom_cameras, None, args, dataset_type)
 
         # self.video_camera = cameraList_from_camInfos(scene_info.video_cameras,-1,args)
         xyz_max = scene_info.point_cloud.points.max(axis=0)
@@ -81,7 +86,7 @@ class Scene:
                                                     "iteration_" + str(self.loaded_iter),
                                                    ))
         else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, self.maxtime)
+            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration, stage, image=None, image_idx = None):
         if stage == "coarse":

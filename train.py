@@ -45,7 +45,7 @@ vgg_perceptual_loss = VGGPerceptualLoss().to(device)
     
 def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations, 
                          checkpoint_iterations, checkpoint, debug_from,
-                         gaussians, scene, stage, tb_writer, train_iter,timer, use_wandb=False):
+                         gaussians, scene, stage, tb_writer, train_iter, timer, use_wandb=False):
     first_iter = 0
     gaussians.training_setup(opt)
     if checkpoint:
@@ -73,7 +73,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     if not viewpoint_stack and not opt.dataloader:
         viewpoint_stack = [i for i in train_cams]
         temp_list = copy.deepcopy(viewpoint_stack)
-    
+
     batch_size = opt.batch_size
     if stage == 'coarse':batch_size=1
     print("data loading done")
@@ -85,6 +85,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             random_loader = False
         else:
             viewpoint_stack_loader = DataLoader(viewpoint_stack, batch_size=batch_size,shuffle=True,num_workers=32,collate_fn=list, drop_last = True)
+            # viewpoint_stack_loader = DataLoader(viewpoint_stack, batch_size=batch_size,shuffle=True,num_workers=0,collate_fn=list, drop_last = True)
             random_loader = True
         loader = iter(viewpoint_stack_loader)
     
@@ -260,6 +261,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 
 def training(dataset, hyper, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, expname, use_wandb):
     # first_iter = 0
+
     tb_writer = prepare_output_and_logger(expname)
     if use_wandb:
         wandb.init(project="TalkingGaussians", name=expname)
@@ -273,12 +275,14 @@ def training(dataset, hyper, opt, pipe, testing_iterations, saving_iterations, c
     train_l_temp=opt.train_l
     opt.train_l=["xyz","deformation","grid","f_dc","f_rest","opacity","scaling","rotation"]
     print(opt.train_l)
+
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                              checkpoint_iterations, checkpoint, debug_from,
                              gaussians, scene, "coarse", tb_writer, opt.coarse_iterations,timer, use_wandb)
     
     opt.train_l = train_l_temp
     print(opt.train_l)
+
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                          checkpoint_iterations, checkpoint, debug_from,
                          gaussians, scene, "fine", tb_writer, opt.iterations,timer, use_wandb)
@@ -400,10 +404,10 @@ if __name__ == "__main__":
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    # safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
+    # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), hp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.expname, args.use_wandb)
 

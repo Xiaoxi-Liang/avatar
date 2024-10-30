@@ -30,9 +30,12 @@ OptimizationParams = dict(
     densify_from_iter =1000,
     densification_interval = 100,
     iterations = 10000,
+    # iterations = 1000,
     batch_size=32,
+    # coarse_iterations = 500,
     coarse_iterations = 7999,
     densify_until_iter = 7000,
+
     opacity_threshold_coarse = 0.005,
     opacity_threshold_fine_init = 0.005,
     opacity_threshold_fine_after = 0.005,
@@ -44,3 +47,4 @@ OptimizationParams = dict(
     split_gs_in_fine_stage=False,
     canonical_tri_plane_factor_list=["opacity","shs"], #["scales","rotations","opacity","shs"]
 )
+
