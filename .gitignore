@@ -16,3 +16,5 @@ wandb/
 
 render_orig.py
 
+data_utils/face_tracking/3DMM/01_MorphableModel.mat 
+data_utils/face_tracking/3DMM/3DMM_info.npy 
